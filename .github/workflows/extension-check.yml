@@ -1,0 +1,129 @@
+# Builds a Calagopus extension inside a real panel checkout: the frontend (typecheck, biome, vite build)
+# and the backend crate (cargo test). Called by every extension repo's check.yml.
+name: Extension check
+
+on:
+  workflow_call:
+    inputs:
+      panel-ref:
+        description: Panel tag or branch to build against. `latest` is the newest `release-*` tag.
+        type: string
+        default: latest
+      runner:
+        description: Runner label for the job.
+        type: string
+        default: blacksmith-4vcpu-ubuntu-2404
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Build against panel ${{ inputs.panel-ref }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    env:
+      SQLX_OFFLINE: "true"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Check out the extension
+        uses: actions/checkout@v7
+        with:
+          path: extension
+
+      - name: Resolve the panel ref
+        id: panel
+        env:
+          PANEL_REF: ${{ inputs.panel-ref }}
+        run: |
+          ref="${PANEL_REF}"
+          if [ "${ref}" = latest ]; then
+            ref=$(git ls-remote --tags --refs https://github.com/calagopus/panel.git 'release-*' \
+              | sed 's#.*refs/tags/##' | sort -V | tail -n 1)
+          fi
+          echo "Building against calagopus/panel ${ref}"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the panel
+        uses: actions/checkout@v7
+        with:
+          repository: calagopus/panel
+          ref: ${{ steps.panel.outputs.ref }}
+          path: panel
+
+      # Two layouts exist: backend/ + frontend/, or the crate at the root beside frontend/.
+      - name: Stage the extension into the panel
+        id: stage
+        run: |
+          package=$(python3 -c 'import tomllib; print(tomllib.load(open("extension/Metadata.toml", "rb"))["package_name"])')
+          id="${package//./_}"
+          backend="panel/backend-extensions/${id}"
+          if [ -d extension/backend ]; then
+            cp -r extension/backend "${backend}"
+          else
+            cp -r extension "${backend}"
+            rm -rf "${backend}/.git" "${backend}/.github" "${backend}/frontend" "${backend}/node_modules"
+          fi
+          cp extension/Metadata.toml "${backend}/"
+          cp -r extension/frontend "panel/frontend/extensions/${id}"
+          crate=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["name"])' "${backend}/Cargo.toml")
+          echo "Staged ${package} as ${id}, crate ${crate}"
+          echo "id=${id}" >> "$GITHUB_OUTPUT"
+          echo "crate=${crate}" >> "$GITHUB_OUTPUT"
+
+      - name: Run the extension's node tests
+        if: hashFiles('extension/tests/*.test.ts') != ''
+        working-directory: extension
+        run: node --test "tests/*.test.ts"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: panel/frontend/pnpm-lock.yaml
+
+      # The staged extension is a new workspace package, so the lockfile has to change.
+      - name: Install frontend dependencies
+        working-directory: panel/frontend
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Typecheck
+        working-directory: panel/frontend
+        run: pnpm typecheck
+
+      - name: Biome
+        working-directory: panel/frontend
+        env:
+          EXT_ID: ${{ steps.stage.outputs.id }}
+        run: pnpm exec biome check "extensions/${EXT_ID}"
+
+      - name: Build the frontend
+        working-directory: panel/frontend
+        run: pnpm build
+
+      - name: Set up Rust
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          toolchain: stable
+          rustflags: ""
+          cache-workspaces: panel -> target
+          cache-key: panel-${{ steps.panel.outputs.ref }}
+
+      # The backend embeds frontend/dist; a stand-in keeps the crate compiling when the frontend build failed.
+      - name: Test the backend crate
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
+        working-directory: panel
+        env:
+          CRATE: ${{ steps.stage.outputs.crate }}
+        run: |
+          [ -f frontend/dist/index.html ] || { mkdir -p frontend/dist && echo stand-in > frontend/dist/index.html; }
+          cargo test -p "${CRATE}"
