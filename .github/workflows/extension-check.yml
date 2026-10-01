@@ -72,11 +72,6 @@ jobs:
           echo "id=${id}" >> "$GITHUB_OUTPUT"
           echo "crate=${crate}" >> "$GITHUB_OUTPUT"
 
-      - name: Run the extension's node tests
-        if: hashFiles('extension/tests/*.test.ts') != ''
-        working-directory: extension
-        run: node --test "tests/*.test.ts"
-
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -108,6 +103,11 @@ jobs:
       - name: Build the frontend
         working-directory: panel/frontend
         run: pnpm build
+
+      - name: Run the extension's node tests
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' && hashFiles('extension/tests/*.test.ts') != '' }}
+        working-directory: extension
+        run: node --test "tests/*.test.ts"
 
       - name: Set up Rust
         if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
