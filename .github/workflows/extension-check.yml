@@ -1,4 +1,4 @@
-# Builds a Calagopus extension inside a real panel checkout: the frontend (typecheck, biome, vite build)
+# Builds a Calagopus extension inside a real panel checkout: the frontend (typecheck, lint/format check, vite build)
 # and the backend crate (cargo test). Called by every extension repo's check.yml.
 name: Extension check
 
@@ -94,11 +94,18 @@ jobs:
         working-directory: panel/frontend
         run: pnpm typecheck
 
-      - name: Biome
+      - name: Lint and format check
         working-directory: panel/frontend
         env:
           EXT_ID: ${{ steps.stage.outputs.id }}
-        run: pnpm exec biome check "extensions/${EXT_ID}"
+        run: |
+          target="extensions/${EXT_ID}"
+          if pnpm exec biome --version >/dev/null 2>&1; then
+            pnpm exec biome check "$target"
+          else
+            pnpm exec oxlint "$target"
+            pnpm exec oxfmt --check "$target"
+          fi
 
       - name: Build the frontend
         working-directory: panel/frontend
