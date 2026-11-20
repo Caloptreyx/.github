@@ -87,10 +87,12 @@ jobs:
           mkdir -p frontend/dist && echo stand-in > frontend/dist/index.html
           cargo build -p panel-rs
 
-      # Without a terminal the export skips its interactive checks (cargo clippy, pnpm lint and build).
+      # Without a terminal the export skips its interactive checks (cargo clippy, pnpm lint and build). panel-rs
+      # panics at startup without APP_ENCRYPTION_KEY; with no DATABASE_URL it then runs CLI commands without an env.
       - name: Export the extension
         working-directory: panel
         env:
+          APP_ENCRYPTION_KEY: export-only
           PACKAGE: ${{ steps.stage.outputs.package }}
           EXT_ID: ${{ steps.stage.outputs.id }}
         run: |
