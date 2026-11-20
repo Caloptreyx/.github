@@ -13,6 +13,12 @@ on:
         description: Runner label for the job.
         type: string
         default: blacksmith-4vcpu-ubuntu-2404
+      lint:
+        description: >-
+          Run the panel's lint and format check. Turn it off when checking an older panel floor whose tooling
+          (Biome before 1.2.10) disagrees with the formatter the extension now follows.
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -95,6 +101,7 @@ jobs:
         run: pnpm typecheck
 
       - name: Lint and format check
+        if: ${{ inputs.lint }}
         working-directory: panel/frontend
         env:
           EXT_ID: ${{ steps.stage.outputs.id }}
