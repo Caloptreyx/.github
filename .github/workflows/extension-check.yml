@@ -19,6 +19,12 @@ on:
           (Biome before 1.2.10) disagrees with the formatter the extension now follows.
         type: boolean
         default: true
+      build-warnings:
+        description: >-
+          Cargo's build.warnings: `deny` fails on any warning. An older panel floor built with today's stable Rust
+          warns in its own crates (newly deprecated std APIs), so a floor check sets `warn`.
+        type: string
+        default: deny
 
 permissions:
   contents: read
@@ -129,6 +135,7 @@ jobs:
         with:
           toolchain: stable
           rustflags: ""
+          build-warnings: ${{ inputs.build-warnings }}
           cache-workspaces: panel -> target
           cache-key: panel-${{ steps.panel.outputs.ref }}
 
