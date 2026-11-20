@@ -1,0 +1,73 @@
+# Checks out calagopus/panel into `panel/` and stages the extension checked out in `extension/` into it, the way the
+# dev panel links extensions: the crate into backend-extensions/<id>, the frontend into frontend/extensions/<id> and
+# migrations/ into database/extension-migrations/<id>. Shared by extension-check.yml and extension-release.yml.
+name: Stage extension into the panel
+description: Check out calagopus/panel and copy the extension in `extension/` into it.
+
+inputs:
+  panel-ref:
+    description: Panel tag or branch. `latest` is the newest `release-*` tag.
+    default: latest
+
+outputs:
+  ref:
+    description: The panel ref that was checked out.
+    value: ${{ steps.panel.outputs.ref }}
+  package:
+    description: The extension's package_name from Metadata.toml.
+    value: ${{ steps.stage.outputs.package }}
+  id:
+    description: The package identifier (package_name with dots turned into underscores).
+    value: ${{ steps.stage.outputs.id }}
+  crate:
+    description: The backend crate's package name.
+    value: ${{ steps.stage.outputs.crate }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the panel ref
+      id: panel
+      shell: bash
+      env:
+        PANEL_REF: ${{ inputs.panel-ref }}
+      run: |
+        ref="${PANEL_REF}"
+        if [ "${ref}" = latest ]; then
+          ref=$(git ls-remote --tags --refs https://github.com/calagopus/panel.git 'release-*' \
+            | sed 's#.*refs/tags/##' | sort -V | tail -n 1)
+        fi
+        echo "Building against calagopus/panel ${ref}"
+        echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
+    - name: Check out the panel
+      uses: actions/checkout@v7
+      with:
+        repository: calagopus/panel
+        ref: ${{ steps.panel.outputs.ref }}
+        path: panel
+
+    # Two layouts exist: backend/ + frontend/, or the crate at the root beside frontend/.
+    - name: Stage the extension into the panel
+      id: stage
+      shell: bash
+      run: |
+        package=$(python3 -c 'import tomllib; print(tomllib.load(open("extension/Metadata.toml", "rb"))["package_name"])')
+        id="${package//./_}"
+        backend="panel/backend-extensions/${id}"
+        if [ -d extension/backend ]; then
+          cp -r extension/backend "${backend}"
+        else
+          cp -r extension "${backend}"
+          rm -rf "${backend}/.git" "${backend}/.github" "${backend}/frontend" "${backend}/node_modules"
+        fi
+        cp extension/Metadata.toml "${backend}/"
+        cp -r extension/frontend "panel/frontend/extensions/${id}"
+        if [ -d extension/migrations ]; then
+          cp -r extension/migrations "panel/database/extension-migrations/${id}"
+        fi
+        crate=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["name"])' "${backend}/Cargo.toml")
+        echo "Staged ${package} as ${id}, crate ${crate}"
+        echo "package=${package}" >> "$GITHUB_OUTPUT"
+        echo "id=${id}" >> "$GITHUB_OUTPUT"
+        echo "crate=${crate}" >> "$GITHUB_OUTPUT"
