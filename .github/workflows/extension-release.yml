@@ -1,6 +1,7 @@
 # Builds the panel's `panel-rs` binary against a real panel checkout, runs `panel-rs extensions export` for the
 # extension at a release tag and uploads the archive to that release, replacing an asset of the same name. Called by
-# every extension repo's release.yml.
+# every extension repo's release.yml. Each asset gets a `<asset>.sha256` companion (`sha256sum` output); the Extension
+# Updater verifies archives against it and against GitHub's asset digest.
 #
 # Inputs:
 #   tag            Release tag to export and upload to (required). The release must already exist.
@@ -113,5 +114,10 @@ jobs:
             cp "${name}" "${alias}"
             assets+=("${alias}")
           done
-          gh release upload "${TAG}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
-          sha256sum "${assets[@]}"
+          files=()
+          for asset in "${assets[@]}"; do
+            sha256sum "${asset}" > "${asset}.sha256"
+            files+=("${asset}" "${asset}.sha256")
+          done
+          gh release upload "${TAG}" "${files[@]}" --repo "${GITHUB_REPOSITORY}" --clobber
+          cat ./*.sha256
