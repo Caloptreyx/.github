@@ -1,7 +1,8 @@
-# Builds the panel's `panel-rs` binary against a real panel checkout, runs `panel-rs extensions export` for the
-# extension at a release tag and uploads the archive to that release, replacing an asset of the same name. Called by
-# every extension repo's release.yml. Each asset gets a `<asset>.sha256` companion (`sha256sum` output); the Extension
-# Updater verifies archives against it and against GitHub's asset digest.
+# Downloads the panel's prebuilt `panel-rs` release binary (falling back to building from source when the panel ref has
+# no release asset), runs `panel-rs extensions export` against a staged panel checkout for the extension at a release
+# tag, and uploads the archive to that release, replacing an asset of the same name. Called by every extension repo's
+# release.yml. Each asset gets a `<asset>.sha256` companion (`sha256sum` output); the Extension Updater verifies
+# archives against it and against GitHub's asset digest.
 #
 # Inputs:
 #   tag            Release tag to export and upload to (required). The release must already exist.
@@ -71,8 +72,35 @@ jobs:
         with:
           panel-ref: ${{ inputs.panel-ref }}
 
-      # The export builds no extension code, so warnings in the panel's own crates must not block a release.
+      # calagopus/panel publishes static Linux binaries on every GitHub release; download it to skip a full Rust build.
+      - name: Download prebuilt panel-rs
+        id: panel-rs
+        env:
+          PANEL_REF: ${{ steps.stage.outputs.ref }}
+        run: |
+          case "$(uname -m)" in
+            x86_64) asset="panel-rs-x86_64-linux" ;;
+            aarch64|arm64) asset="panel-rs-aarch64-linux" ;;
+            *) asset="" ;;
+          esac
+          bin="${RUNNER_TEMP:-/tmp}/panel-rs"
+          url="https://github.com/calagopus/panel/releases/download/${PANEL_REF}/${asset}"
+          if [ -n "${asset}" ] && curl -fsSL --retry 3 --retry-delay 2 "${url}" -o "${bin}"; then
+            chmod +x "${bin}"
+            echo "Downloaded prebuilt ${asset} for ${PANEL_REF}"
+            echo "prebuilt=true" >> "$GITHUB_OUTPUT"
+            echo "bin=${bin}" >> "$GITHUB_OUTPUT"
+          else
+            rm -f "${bin}"
+            echo "::notice::No prebuilt ${asset:-panel-rs} release asset for ${PANEL_REF}; falling back to cargo build"
+            echo "prebuilt=false" >> "$GITHUB_OUTPUT"
+            echo "bin=./target/debug/panel-rs" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Fallback when panel-ref is a branch or a tag without a prebuilt release asset. The export builds no extension
+      # code, so warnings in the panel's own crates must not block a release.
       - name: Set up Rust
+        if: ${{ steps.panel-rs.outputs.prebuilt != 'true' }}
         uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           toolchain: stable
@@ -83,6 +111,7 @@ jobs:
 
       # The binary embeds frontend/dist, which the export never reads, so a stand-in replaces the frontend build.
       - name: Build panel-rs
+        if: ${{ steps.panel-rs.outputs.prebuilt != 'true' }}
         working-directory: panel
         run: |
           mkdir -p frontend/dist && echo stand-in > frontend/dist/index.html
@@ -94,11 +123,12 @@ jobs:
         working-directory: panel
         env:
           APP_ENCRYPTION_KEY: export-only
+          PANEL_RS: ${{ steps.panel-rs.outputs.bin }}
           PACKAGE: ${{ steps.stage.outputs.package }}
           EXT_ID: ${{ steps.stage.outputs.id }}
         run: |
-          ./target/debug/panel-rs extensions export "${PACKAGE}"
-          ./target/debug/panel-rs extensions inspect "exported-extensions/${EXT_ID}.c7s.zip"
+          "${PANEL_RS}" extensions export "${PACKAGE}"
+          "${PANEL_RS}" extensions inspect "exported-extensions/${EXT_ID}.c7s.zip"
 
       - name: Upload to the release
         working-directory: panel/exported-extensions
